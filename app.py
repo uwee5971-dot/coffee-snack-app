@@ -1,183 +1,150 @@
 import streamlit as st
 import pandas as pd
-import os
+from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
 
-# --- 設定：データ保存用ファイル ---
-MEMBER_FILE = "members_list.txt"
-EXPENSE_FILE = "expenses_log.csv"
-HISTORY_FILE = "settlement_history.csv"
+# --- アプリ基本設定 ---
+st.set_page_config(page_title="☕精算ツール🍘", layout="wide")
+st.title("☕精算ツール🍘")
 
-# --- データ操作用関数 ---
-def load_members():
-    """メンバーリストの読み込み [cite: 5, 10, 24]"""
-    if os.path.exists(MEMBER_FILE):
-        with open(MEMBER_FILE, "r", encoding="utf-8") as f:
-            return [line.strip() for line in f if line.strip()]
-    return ["Aさん", "Bさん"]
+# スプレッドシート接続の確立
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-def save_members(member_list):
-    """メンバーリストの保存 [cite: 5, 10, 24]"""
-    with open(MEMBER_FILE, "w", encoding="utf-8") as f:
-        for m in member_list:
-            f.write(f"{m}\n")
+# --- データ操作用関数（スプレッドシート版） ---
+def load_data(worksheet_name):
+    """指定したワークシートのデータを読み込む"""
+    return conn.read(worksheet=worksheet_name, ttl=0) # ttl=0で常に最新を取得
 
-def load_expenses():
-    """支出履歴の読み込み [cite: 8, 18, 19, 22]"""
-    if os.path.exists(EXPENSE_FILE):
-        return pd.read_csv(EXPENSE_FILE)
-    return pd.DataFrame(columns=["日付", "購入者", "カテゴリー", "項目", "金額"])
+def update_data(worksheet_name, df):
+    """指定したワークシートにデータを上書き保存する"""
+    conn.update(worksheet=worksheet_name, data=df)
 
-def save_expense(date, name, category, item, amount):
-    """支出履歴の保存 [cite: 8, 18, 19, 22]"""
-    df = load_expenses()
-    new_data = pd.DataFrame([[date, name, category, item, amount]], 
-                            columns=["日付", "購入者", "カテゴリー", "項目", "金額"])
-    df = pd.concat([df, new_data], ignore_index=True)
-    df.to_csv(EXPENSE_FILE, index=False)
+# メンバーリストの取得
+def get_members():
+    df = load_data("members")
+    return df["name"].tolist() if not df.empty else []
 
-def finalize_and_reset(results_df):
-    """履歴保存とリセット [cite: 9, 15, 24]"""
-    results_df["清算日"] = datetime.now().strftime("%Y-%m-%d")
-    if os.path.exists(HISTORY_FILE):
-        history_df = pd.read_csv(HISTORY_FILE)
-        history_df = pd.concat([history_df, results_df], ignore_index=True)
-    else:
-        history_df = results_df
-    history_df.to_csv(HISTORY_FILE, index=False)
-    if os.path.exists(EXPENSE_FILE):
-        os.remove(EXPENSE_FILE)
+# --- メニュー構成 ---
+menu = st.sidebar.selectbox("メニューを選択", ["出納表（都度入力）", "割り勘計算（月末）", "過去の履歴", "メンバー管理"])
+members = get_members()
 
-# --- アプリ構成 ---
-st.set_page_config(page_title="☕精算ツール🍘", layout="wide") # アプリ名の更新
-st.title("☕精算ツール🍘") # メインタイトルの更新
-
-# サイドバーメニュー [cite: 5, 21, 24]
-menu = st.sidebar.selectbox("メニューを選択", ["出納表（都度入力）", "計算（月末）", "過去の履歴", "メンバー管理"])
-members = load_members()
-
-# --- 1. 出納表（都度入力）画面 ---
+# --- 1. 出納表（都度入力） ---
 if menu == "出納表（都度入力）":
     st.header("📝 支出の記録")
-    with st.form("expense_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        with col1: date = st.date_input("日付", datetime.now())
-        with col2: buyer = st.selectbox("購入者", members)
-        with col3: category = st.radio("カテゴリー", ["コーヒー関連", "お菓子"]) # カテゴリー分け [cite: 37, 38]
-        
-        col4, col5 = st.columns(2)
-        with col4: item = st.text_input("項目", placeholder="豆、牛乳、チョコなど")
-        with col5: amount = st.number_input("金額 (円)", min_value=0, step=10)
-        
-        if st.form_submit_button("記録する"):
-            if item and amount > 0:
-                save_expense(date, buyer, category, item, amount)
-                st.success(f"{category}の「{item}」を記録しました！")
-            else:
-                st.error("入力を確認してください。")
+    if not members:
+        st.warning("先に「メンバー管理」からメンバーを登録してください。")
+    else:
+        with st.form("expense_form", clear_on_submit=True):
+            col1, col2, col3 = st.columns(3)
+            with col1: date = st.date_input("日付", datetime.now())
+            with col2: buyer = st.selectbox("購入者", members)
+            with col3: category = st.radio("カテゴリー", ["コーヒー関連", "お菓子"])
+            
+            col4, col5 = st.columns(2)
+            with col4: item = st.text_input("項目", placeholder="豆、牛乳、チョコなど")
+            with col5: amount = st.number_input("金額 (円)", min_value=0, step=10)
+            
+            if st.form_submit_button("記録する"):
+                if item and amount > 0:
+                    df_exp = load_data("expenses")
+                    new_row = pd.DataFrame([[date.strftime('%Y-%m-%d'), buyer, category, item, amount]], columns=df_exp.columns)
+                    df_updated = pd.concat([df_exp, new_row], ignore_index=True)
+                    update_data("expenses", df_updated)
+                    st.success("スプレッドシートに記録しました！")
+                else:
+                    st.error("入力を確認してください。")
 
     st.divider()
     st.subheader("📊 今月の購入履歴")
-    df_exp = load_expenses()
-    st.dataframe(df_exp, use_container_width=True)
+    st.dataframe(load_data("expenses"), use_container_width=True)
 
-# --- 2. 割り勘計算（月末）画面 ---
-elif menu == "計算（月末）":
-    st.header("📊 月次計算")
-    df_exp = load_expenses()
+# --- 2. 割り勘計算（月末） ---
+elif menu == "割り勘計算（月末）":
+    st.header("📊 月次割り勘計算")
+    df_exp = load_data("expenses")
     
-    # カテゴリー別に自動集計 [cite: 22, 37, 38]
-    coffee_exp_map = df_exp[df_exp["カテゴリー"] == "コーヒー関連"].groupby("購入者")["金額"].sum().to_dict()
-    snack_exp_map = df_exp[df_exp["カテゴリー"] == "お菓子"].groupby("購入者")["金額"].sum().to_dict()
-    
-    st.info("各自が「飲んだ杯数」と「食べたお菓子の数」を入力してください。")
-    
-    cups = {}
-    snacks = {}
-    
-    for m in members:
-        c_exp = coffee_exp_map.get(m, 0)
-        s_exp = snack_exp_map.get(m, 0)
+    if df_exp.empty:
+        st.info("今月の支出データがありません。")
+    else:
+        coffee_exp_map = df_exp[df_exp["カテゴリー"] == "コーヒー関連"].groupby("buyer")["amount"].sum().to_dict()
+        snack_exp_map = df_exp[df_exp["カテゴリー"] == "お菓子"].groupby("buyer")["amount"].sum().to_dict()
         
-        with st.container():
-            col_name, col_info, col_cup, col_snack = st.columns([1.5, 2, 2, 2])
-            with col_name:
-                st.markdown(f"👤 **{m}**")
-            with col_info:
-                st.caption(f"支出済: コーヒー{int(c_exp)}円 / 菓子{int(s_exp)}円")
-            with col_cup:
-                cups[m] = st.number_input(f"飲んだ杯数", min_value=0, key=f"cup_{m}")
-            with col_snack:
-                snacks[m] = st.number_input(f"食べたお菓子", min_value=0, key=f"snack_{m}")
-        st.divider()
+        cups = {}
+        snacks = {}
+        for m in members:
+            c_p = int(coffee_exp_map.get(m, 0))
+            s_p = int(snack_exp_map.get(m, 0))
+            with st.container():
+                col_n, col_i, col_c, col_s = st.columns([1.5, 2, 2, 2])
+                with col_n: st.markdown(f"👤 **{m}**")
+                with col_i: st.caption(f"支出済: ☕{c_p}円 / 🍪{s_p}円")
+                with col_c: cups[m] = st.number_input(f"杯数", min_value=0, key=f"cup_{m}")
+                with col_s: snacks[m] = st.number_input(f"個数", min_value=0, key=f"snk_{m}")
+            st.divider()
 
-    if st.button("🚀 計算を実行する"):
-        total_c_exp = sum(coffee_exp_map.values())
-        total_s_exp = sum(snack_exp_map.values())
-        total_cups = sum(cups.values())
-        total_snacks = sum(snacks.values())
+        if st.button("🚀 計算を実行する"):
+            total_c = sum(coffee_exp_map.values())
+            total_s = sum(snack_exp_map.values())
+            sum_cups = sum(cups.values())
+            sum_snks = sum(snacks.values())
 
-        if total_cups > 0 or total_snacks > 0:
-            # コーヒーとお菓子それぞれの単価計算 [cite: 1, 12, 37, 38]
-            unit_price_c = total_c_exp / total_cups if total_cups > 0 else 0
-            unit_price_s = total_s_exp / total_snacks if total_snacks > 0 else 0
-            
-            st.write(f"☕ コーヒー単価: **{unit_price_c:.1f}円/杯** ｜ 🍪 お菓子単価: **{unit_price_s:.1f}円/個**")
+            if sum_cups > 0 or sum_snks > 0:
+                u_p_c = total_c / sum_cups if sum_cups > 0 else 0
+                u_p_s = total_s / sum_snks if sum_snks > 0 else 0
+                st.write(f"☕単価: {u_p_c:.1f}円 ｜ 🍪単価: {u_p_s:.1f}円")
 
-            final_data = []
-            for m in members:
-                paid = coffee_exp_map.get(m, 0) + snack_exp_map.get(m, 0)
-                # 本来の負担額を合算して計算 [cite: 12, 38]
-                fair_share = (unit_price_c * cups[m]) + (unit_price_s * snacks[m])
-                balance = paid - fair_share
+                final_list = []
+                for m in members:
+                    paid = coffee_exp_map.get(m, 0) + snack_exp_map.get(m, 0)
+                    share = (u_p_c * cups[m]) + (u_p_s * snacks[m])
+                    bal = paid - share
+                    final_list.append({"name": m, "total_paid": int(paid), "cups": cups[m], "snacks": snacks[m], "fair_share": round(share), "balance": round(bal)})
+
+                res_df = pd.DataFrame(final_list)
+                st.table(res_df)
+                st.session_state['last_res'] = res_df
                 
-                final_data.append({
-                    "名前": m,
-                    "合計支出額": int(paid),
-                    "コーヒー杯数": cups[m],
-                    "お菓子個数": snacks[m],
-                    "本来の負担額": round(fair_share),
-                    "清算額": round(balance)
-                })
+                for res in final_list:
+                    if res["balance"] > 0: st.success(f"✅ {res['name']}：{res['balance']}円 受取")
+                    elif res["balance"] < 0: st.error(f"💸 {res['name']}：{abs(res['balance'])}円 支払")
+            else:
+                st.error("杯数または個数を入力してください。")
 
-            res_df = pd.DataFrame(final_data)
-            st.table(res_df)
-            st.session_state['last_result'] = res_df
-            
-            # 清算アクションの判定 [cite: 1, 12, 28]
-            for res in final_data:
-                val = res["清算額"]
-                if val > 0: st.success(f"✅ **{res['名前']}**：{val}円 受け取ってください。")
-                elif val < 0: st.error(f"💸 **{res['名前']}**：{abs(val)}円 支払ってください。")
-        else:
-            st.error("杯数または個数を入力してください。")
+        if 'last_res' in st.session_state:
+            if st.button("今月の清算を確定してリセットする"):
+                # 履歴の保存
+                df_hist = load_data("history")
+                new_res = st.session_state['last_res'].copy()
+                new_res["settle_date"] = datetime.now().strftime("%Y-%m-%d")
+                df_hist_updated = pd.concat([df_hist, new_res], ignore_index=True)
+                update_data("history", df_hist_updated)
+                # 出納表のリセット（ヘッダーのみ残す）
+                empty_exp = pd.DataFrame(columns=["date", "buyer", "category", "item", "amount"])
+                update_data("expenses", empty_exp)
+                st.success("履歴を保存し、出納表をリセットしました！")
+                del st.session_state['last_res']
+                st.rerun()
 
-    # 確定・リセットボタン [cite: 22, 24, 28, 29]
-    if 'last_result' in st.session_state:
-        if st.button("今月の清算を確定してリセットする"):
-            finalize_and_reset(st.session_state['last_result'])
-            del st.session_state['last_result']
-            st.success("データをリセットしました！")
-            st.rerun()
-
-# --- 3. 過去の履歴画面 ---
+# --- 3. 過去の履歴 / 4. メンバー管理 ---
 elif menu == "過去の履歴":
     st.header("📜 過去の清算記録")
-    if os.path.exists(HISTORY_FILE):
-        st.dataframe(pd.read_csv(HISTORY_FILE), use_container_width=True)
-    else: st.write("履歴はありません。")
+    st.dataframe(load_data("history"), use_container_width=True)
 
-# --- 4. メンバー管理画面 ---
 else:
     st.header("⚙️ メンバー管理")
-    new_member = st.text_input("追加する名前")
+    new_m = st.text_input("追加する名前")
     if st.button("追加"):
-        if new_member and new_member not in members:
-            members.append(new_member)
-            save_members(members)
-            st.rerun()
+        if new_m:
+            df_m = load_data("members")
+            if new_m not in df_m["name"].tolist():
+                new_row = pd.DataFrame([[new_m]], columns=["name"])
+                update_data("members", pd.concat([df_m, new_row], ignore_index=True))
+                st.success(f"{new_m}さんを登録しました。")
+                st.rerun()
     st.divider()
-    to_delete = st.multiselect("削除するメンバー", members)
+    del_m = st.multiselect("削除する名前", members)
     if st.button("削除"):
-        save_members([m for m in members if m not in to_delete])
+        df_m = load_data("members")
+        df_m = df_m[~df_m["name"].isin(del_m)]
+        update_data("members", df_m)
         st.rerun()

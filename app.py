@@ -4,8 +4,8 @@ from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
 
 # --- アプリ基本設定 ---
-st.set_page_config(page_title="☕精算ツール🍘", layout="wide")
-st.title("☕精算ツール🍘")
+st.set_page_config(page_title="☕️精算ツール 🍘", layout="wide")
+st.title("☕️精算ツール🍘")
 
 # スプレッドシート接続の確立
 conn = st.connection("gsheets", type=GSheetsConnection)

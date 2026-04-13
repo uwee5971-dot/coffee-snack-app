@@ -111,7 +111,7 @@ elif menu == "月末精算":
                 st.error("杯数または個数を入力してください。")
 
         if 'last_res' in st.session_state:
-            if st.button("今月の清算を確定してリセットする"):
+            if st.button("今月の精算を確定してリセットする"):
                 # 履歴の保存
                 df_hist = load_data("history")
                 new_res = st.session_state['last_res'].copy()
@@ -127,7 +127,7 @@ elif menu == "月末精算":
 
 # --- 3. 過去の履歴 / 4. メンバー管理 ---
 elif menu == "過去の履歴":
-    st.header("📜 過去の清算記録")
+    st.header("📜 過去の精算記録")
     st.dataframe(load_data("history"), use_container_width=True)
 
 else:

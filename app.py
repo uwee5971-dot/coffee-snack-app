@@ -19,12 +19,17 @@ def load_data(worksheet_name):
 def update_data(worksheet_name, df):
     conn.update(worksheet=worksheet_name, data=df)
 
-def get_members():
+def get_member_map():
+    """名前とSlack IDの対応表を作成する"""
     df = load_data("members")
-    return df["name"].tolist() if not df.empty else []
+    if df.empty:
+        return {}
+    # slack_id列がない、または空の場合の処理
+    if "slack_id" not in df.columns:
+        df["slack_id"] = ""
+    return pd.Series(df.slack_id.values, index=df.name).to_dict()
 
 def send_slack_notification(message):
-    """Secretsに登録したURLを使ってSlackに通知を送る"""
     webhook_url = st.secrets["slack_webhook_url"]
     payload = {"text": message}
     try:
@@ -40,7 +45,8 @@ def send_slack_notification(message):
 
 # --- メニュー構成 ---
 menu = st.sidebar.selectbox("メニューを選択", ["支出記録 / 出納表", "月末精算", "過去の履歴", "メンバー管理"])
-members = get_members()
+member_map = get_member_map()
+members = list(member_map.keys())
 
 # --- 1. 支出記録 / 出納表 ---
 if menu == "支出記録 / 出納表":
@@ -77,6 +83,7 @@ elif menu == "月末精算":
     if df_exp.empty:
         st.info("データがありません。")
     else:
+        # スプレッドシートのカラム名に合わせて修正が必要な場合があります（例：buyer, amount）
         coffee_exp = df_exp[df_exp["category"] == "コーヒー関連"].groupby("buyer")["amount"].sum().to_dict()
         snack_exp = df_exp[df_exp["category"] == "お菓子"].groupby("buyer")["amount"].sum().to_dict()
         
@@ -100,7 +107,7 @@ elif menu == "月末精算":
                 st.write(f"単価 ☕: {u_c:.1f}円 / 🍪: {u_s:.1f}円")
 
                 final_list = []
-                slack_msg = f"📢 【精算ツール】計算完了！\n☕単価: {u_c:.1f}円 / 🍪単価: {u_s:.1f}円\n\n"
+                slack_msg = f"📢 【精算ツール】計算完了！各自精算をお願いします。\n☕単価: {u_c:.1f}円 / 🍪単価: {u_s:.1f}円\n\n"
                 
                 for m in members:
                     paid = coffee_exp.get(m, 0) + snack_exp.get(m, 0)
@@ -108,10 +115,15 @@ elif menu == "月末精算":
                     bal = round(paid - share)
                     final_list.append({"name": m, "total_paid": int(paid), "cups": cups[m], "snacks": snacks[m], "fair_share": round(share), "balance": bal})
                     
-                    if bal > 0: status = f"➡️ {abs(bal)}円受取"
-                    elif bal < 0: status = f"⬅️ {abs(bal)}円支払"
+                    # メンションの作成
+                    sid = member_map.get(m)
+                    # IDがあればメンション形式に、なければ名前にする
+                    mention = f"<@{sid}>" if pd.notna(sid) and sid != "" else m
+                    
+                    if bal > 0: status = f"➡️ **{abs(bal)}円 受取**"
+                    elif bal < 0: status = f"⬅️ **{abs(bal)}円 支払**"
                     else: status = "✅ 精算不要"
-                    slack_msg += f"・{m}: {status}\n"
+                    slack_msg += f"・{mention}: {status}\n"
                 
                 st.table(pd.DataFrame(final_list))
                 st.session_state['last_res'] = pd.DataFrame(final_list)
@@ -120,7 +132,7 @@ elif menu == "月末精算":
                 st.error("数値を入力してください。")
 
         if 'slack_text' in st.session_state:
-            if st.button("📢 Slackに結果を通知する"):
+            if st.button("📢 Slackにメンション付き通知を飛ばす"):
                 if send_slack_notification(st.session_state['slack_text']):
                     st.success("Slackに通知を送信しました！")
                 del st.session_state['slack_text']
@@ -136,19 +148,29 @@ elif menu == "月末精算":
                 del st.session_state['last_res']
                 st.rerun()
 
+# --- 3. 過去の履歴 ---
 elif menu == "過去の履歴":
     st.header("📜 過去の清算記録")
     st.dataframe(load_data("history"), use_container_width=True)
 
+# --- 4. メンバー管理 ---
 else:
     st.header("⚙️ メンバー管理")
-    new_m = st.text_input("追加する名前")
-    if st.button("追加"):
-        if new_m:
-            df_m = load_data("members")
-            if new_m not in df_m["name"].tolist():
-                update_data("members", pd.concat([df_m, pd.DataFrame([[new_m]], columns=["name"])], ignore_index=True))
-                st.rerun()
+    with st.form("add_member"):
+        new_m = st.text_input("追加する名前")
+        new_sid = st.text_input("SlackメンバーID (例: U012345678)")
+        if st.form_submit_button("追加"):
+            if new_m:
+                df_m = load_data("members")
+                if "slack_id" not in df_m.columns:
+                    df_m["slack_id"] = ""
+                
+                if new_m not in df_m["name"].tolist():
+                    new_row = pd.DataFrame([[new_m, new_sid]], columns=["name", "slack_id"])
+                    update_data("members", pd.concat([df_m, new_row], ignore_index=True))
+                    st.rerun()
+                else:
+                    st.error("その名前は既に登録されています。")
     st.divider()
     del_m = st.multiselect("削除", members)
     if st.button("削除実行"):

@@ -39,12 +39,12 @@ def send_slack_notification(message):
         return False
 
 # --- メニュー構成 ---
-menu = st.sidebar.selectbox("メニューを選択", ["出納表（都度入力）", "割り勘計算（月末）", "過去の履歴", "メンバー管理"])
+menu = st.sidebar.selectbox("メニューを選択", ["支出記録 / 出納表", "月末精算", "過去の履歴", "メンバー管理"])
 members = get_members()
 
-# --- 1. 出納表（都度入力） ---
-if menu == "出納表（都度入力）":
-    st.header("📝 支出の記録")
+# --- 1. 支出記録 / 出納表 ---
+if menu == "支出記録 / 出納表":
+    st.header("📝 支出記録")
     if not members:
         st.warning("先に「メンバー管理」からメンバーを登録してください。")
     else:
@@ -69,9 +69,9 @@ if menu == "出納表（都度入力）":
     st.divider()
     st.dataframe(load_data("expenses"), use_container_width=True)
 
-# --- 2. 割り勘計算（月末） ---
-elif menu == "割り勘計算（月末）":
-    st.header("📊 月次割り勘計算")
+# --- 2. 月末精算 ---
+elif menu == "月末精算":
+    st.header("📊 月末精算")
     df_exp = load_data("expenses")
     
     if df_exp.empty:

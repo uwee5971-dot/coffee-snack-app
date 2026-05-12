@@ -24,7 +24,6 @@ def get_member_map():
     df = load_data("members")
     if df.empty:
         return {}
-    # slack_id列がない、または空の場合の処理
     if "slack_id" not in df.columns:
         df["slack_id"] = ""
     return pd.Series(df.slack_id.values, index=df.name).to_dict()
@@ -83,7 +82,7 @@ elif menu == "月末精算":
     if df_exp.empty:
         st.info("データがありません。")
     else:
-        # スプレッドシートのカラム名に合わせて修正が必要な場合があります（例：buyer, amount）
+        # 支出の集計
         coffee_exp = df_exp[df_exp["category"] == "コーヒー関連"].groupby("buyer")["amount"].sum().to_dict()
         snack_exp = df_exp[df_exp["category"] == "お菓子"].groupby("buyer")["amount"].sum().to_dict()
         
@@ -92,44 +91,60 @@ elif menu == "月末精算":
             with st.container():
                 col_n, col_i, col_c, col_s = st.columns([1.5, 2, 2, 2])
                 col_n.markdown(f"👤 **{m}**")
-                col_i.caption(f"支出: ☕{int(coffee_exp.get(m, 0))}円 / 🍪{int(snack_exp.get(m, 0))}円")
-                cups[m] = col_c.number_input("杯数", min_value=0, key=f"c_{m}")
-                snacks[m] = col_s.number_input("個数", min_value=0, key=f"s_{m}")
+                col_i.caption(f"支出済: ☕{int(coffee_exp.get(m, 0))}円 / 🍪{int(snack_exp.get(m, 0))}円")
+                cups[m] = col_c.number_input("飲んだ杯数", min_value=0, key=f"c_{m}")
+                snacks[m] = col_s.number_input("食べたお菓子(個)", min_value=0, key=f"s_{m}")
             st.divider()
 
         if st.button("🚀 計算を実行する"):
-            total_c, total_s = sum(coffee_exp.values()), sum(snack_exp.values())
-            sum_c, sum_s = sum(cups.values()), sum(snacks.values())
+            # コーヒーは実費ベースで単価を計算
+            total_c = sum(coffee_exp.values())
+            sum_c = sum(cups.values())
+            u_c = total_c / sum_c if sum_c > 0 else 0
+            
+            # お菓子は一律40円
+            u_s = 40.0
+            
+            st.write(f"今回の計算単価 --- ☕コーヒー: **{u_c:.1f}円/杯** ｜ 🍪お菓子: **{u_s}円/個（固定）**")
 
-            if sum_c > 0 or sum_s > 0:
-                u_c = total_c / sum_c if sum_c > 0 else 0
-                u_s = total_s / sum_s if sum_s > 0 else 0
-                st.write(f"単価 ☕: {u_c:.1f}円 / 🍪: {u_s:.1f}円")
-
-                final_list = []
-                slack_msg = f"📢 【精算ツール】計算完了！各自精算をお願いします。\n☕単価: {u_c:.1f}円 / 🍪単価: {u_s:.1f}円\n\n"
+            final_list = []
+            slack_msg = f"📢 【精算ツール】計算完了！各自精算をお願いします。\n☕単価: {u_c:.1f}円 / 🍪単価: {u_s}円(固定)\n\n"
+            
+            for m in members:
+                # 自分が実際に支払った総額（コーヒー＋お菓子）
+                paid = coffee_exp.get(m, 0) + snack_exp.get(m, 0)
+                # 負担すべき額 = (コーヒー単価 × 杯数) + (40円 × 個数)
+                share = (u_c * cups[m]) + (u_s * snacks[m])
+                bal = round(paid - share)
                 
-                for m in members:
-                    paid = coffee_exp.get(m, 0) + snack_exp.get(m, 0)
-                    share = (u_c * cups[m]) + (u_s * snacks[m])
-                    bal = round(paid - share)
-                    final_list.append({"name": m, "total_paid": int(paid), "cups": cups[m], "snacks": snacks[m], "fair_share": round(share), "balance": bal})
-                    
-                    # メンションの作成
-                    sid = member_map.get(m)
-                    # IDがあればメンション形式に、なければ名前にする
-                    mention = f"<@{sid}>" if pd.notna(sid) and sid != "" else m
-                    
-                    if bal > 0: status = f"➡️ **{abs(bal)}円 受取**"
-                    elif bal < 0: status = f"⬅️ **{abs(bal)}円 支払**"
-                    else: status = "✅ 精算不要"
-                    slack_msg += f"・{mention}: {status}\n"
+                final_list.append({
+                    "名前": m, 
+                    "支出額合計": int(paid), 
+                    "コーヒー杯数": cups[m], 
+                    "お菓子個数": snacks[m], 
+                    "負担額合計": round(share), 
+                    "清算額": bal
+                })
                 
-                st.table(pd.DataFrame(final_list))
-                st.session_state['last_res'] = pd.DataFrame(final_list)
-                st.session_state['slack_text'] = slack_msg
-            else:
-                st.error("数値を入力してください。")
+                # Slackメンション用
+                sid = member_map.get(m)
+                mention = f"<@{sid}>" if pd.notna(sid) and sid != "" else m
+                
+                if bal > 0: status = f"➡️ **{abs(bal)}円 受取**"
+                elif bal < 0: status = f"⬅️ **{abs(bal)}円 支払**"
+                else: status = "✅ 精算不要"
+                slack_msg += f"・{mention}: {status}\n"
+            
+            st.table(pd.DataFrame(final_list))
+            st.session_state['last_res'] = pd.DataFrame(final_list)
+            st.session_state['slack_text'] = slack_msg
+            
+            # お菓子の剰余金（あるいは不足分）の表示
+            total_snack_paid = sum(snack_exp.values())
+            total_snack_share = sum([u_s * s for s in snacks.values()])
+            diff = total_snack_share - total_snack_paid
+            if diff != 0:
+                st.info(f"💡 お菓子代の余剰/不足: {round(diff)} 円（固定単価のため、購入総額と集金総額に差が生じます）")
 
         if 'slack_text' in st.session_state:
             if st.button("📢 Slackにメンション付き通知を飛ばす"):
@@ -148,12 +163,11 @@ elif menu == "月末精算":
                 del st.session_state['last_res']
                 st.rerun()
 
-# --- 3. 過去の履歴 ---
+# --- 3. 過去の履歴 / 4. メンバー管理 (変更なし) ---
 elif menu == "過去の履歴":
     st.header("📜 過去の清算記録")
     st.dataframe(load_data("history"), use_container_width=True)
 
-# --- 4. メンバー管理 ---
 else:
     st.header("⚙️ メンバー管理")
     with st.form("add_member"):
@@ -164,13 +178,10 @@ else:
                 df_m = load_data("members")
                 if "slack_id" not in df_m.columns:
                     df_m["slack_id"] = ""
-                
                 if new_m not in df_m["name"].tolist():
                     new_row = pd.DataFrame([[new_m, new_sid]], columns=["name", "slack_id"])
                     update_data("members", pd.concat([df_m, new_row], ignore_index=True))
                     st.rerun()
-                else:
-                    st.error("その名前は既に登録されています。")
     st.divider()
     del_m = st.multiselect("削除", members)
     if st.button("削除実行"):

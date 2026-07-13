@@ -97,18 +97,16 @@ elif menu == "月末精算":
             st.divider()
 
         if st.button("🚀 計算を実行する"):
-            # コーヒーは実費ベースで単価を計算
-            total_c = sum(coffee_exp.values())
-            sum_c = sum(cups.values())
-            u_c = total_c / sum_c if sum_c > 0 else 0
+            # コーヒーの単価を一律80円の固定に変更
+            u_c = 80.0
             
             # お菓子は一律40円
             u_s = 40.0
             
-            st.write(f"今回の計算単価 --- ☕コーヒー: **{u_c:.1f}円/杯** ｜ 🍪お菓子: **{u_s}円/個（固定）**")
+            st.write(f"今回の計算単価 --- ☕コーヒー: **{u_c:.1f}円/杯（固定）** ｜ 🍪お菓子: **{u_s}円/個（固定）**")
 
             final_list = []
-            slack_msg = f"📢 【精算ツール】計算完了！各自精算をお願いします。\n☕単価: {u_c:.1f}円 / 🍪単価: {u_s}円(固定)\n\n"
+            slack_msg = f"📢 【精算ツール】計算完了！各自精算をお願いします。\n☕単価: {u_c:.1f}円(固定) / 🍪単価: {u_s}円(固定)\n\n"
             
             for m in members:
                 # 自分が実際に支払った総額（コーヒー＋お菓子）
@@ -139,12 +137,21 @@ elif menu == "月末精算":
             st.session_state['last_res'] = pd.DataFrame(final_list)
             st.session_state['slack_text'] = slack_msg
             
-            # お菓子の剰余金（あるいは不足分）の表示
+            # コーヒーとお菓子、それぞれの余剰/不足を表示
+            total_coffee_paid = sum(coffee_exp.values())
+            total_coffee_share = sum([u_c * c for c in cups.values()])
+            coffee_diff = total_coffee_share - total_coffee_paid
+            
             total_snack_paid = sum(snack_exp.values())
             total_snack_share = sum([u_s * s for s in snacks.values()])
-            diff = total_snack_share - total_snack_paid
-            if diff != 0:
-                st.info(f"💡 お菓子代の余剰/不足: {round(diff)} 円（固定単価のため、購入総額と集金総額に差が生じます）")
+            snack_diff = total_snack_share - total_snack_paid
+            
+            if coffee_diff != 0 or snack_diff != 0:
+                st.info(
+                    f"💡 固定単価による購入総額と集金総額の差\n"
+                    f"・☕ コーヒーの余剰/不足: {round(coffee_diff)} 円\n"
+                    f"・🍪 お菓子の余剰/不足: {round(snack_diff)} 円"
+                )
 
         if 'slack_text' in st.session_state:
             if st.button("📢 Slackにメンション付き通知を飛ばす"):
